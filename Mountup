@@ -1,0 +1,148 @@
+addon = {
+    name = 'mountup',
+    author = 'Vrah',
+    version = '1.0',
+}
+
+require('common')
+
+local chat = require('chat')
+
+-- =========================================================
+-- CONFIG
+-- =========================================================
+local MOUNT_COMMAND = '/mount "%s"'
+local DISMOUNT_COMMAND = '/dismount'
+
+-- ONLY your mounts
+local OWNED_MOUNTS = {
+    'Raptor',
+    'Tiger',
+    'Bomb',
+    'Beetle',
+    'Magic Pot',
+    'Xzomit',
+    'Goobbue',
+    'Adamantoise',
+    'Dhalmel',
+    'Wivre',
+    'Phuabo',
+}
+
+-- =========================================================
+-- STATE
+-- =========================================================
+local state = {
+    mounted = false,
+    last_toggle = 0,
+}
+
+-- =========================================================
+-- HELPERS
+-- =========================================================
+local function message(text)
+    print(chat.header('MountUp'):append(chat.message(text)))
+end
+
+local function queue(cmd)
+    AshitaCore:GetChatManager():QueueCommand(1, cmd)
+end
+
+local function choose_random_mount()
+    if #OWNED_MOUNTS == 0 then
+        return nil
+    end
+
+    local idx = math.random(1, #OWNED_MOUNTS)
+    return OWNED_MOUNTS[idx]
+end
+
+local function do_mount()
+    local mount_name = choose_random_mount()
+    if not mount_name then
+        message('No mounts listed.')
+        return
+    end
+
+    queue(string.format(MOUNT_COMMAND, mount_name))
+    state.mounted = true
+    message(('Mounting: %s'):format(mount_name))
+end
+
+local function do_dismount()
+    queue(DISMOUNT_COMMAND)
+    state.mounted = false
+    message('Dismounting.')
+end
+
+local function mount_or_dismount()
+    local now = os.clock()
+
+    if (now - state.last_toggle) < 1.0 then
+        return
+    end
+
+    state.last_toggle = now
+
+    if state.mounted then
+        do_dismount()
+    else
+        do_mount()
+    end
+end
+
+-- =========================================================
+-- EVENTS
+-- =========================================================
+ashita.events.register('load', 'mountup_load', function()
+    math.randomseed(os.time())
+    queue('/alias /mountup /lua c mountup toggle')
+    message('Loaded. Type /mountup to mount or dismount.')
+end)
+
+ashita.events.register('unload', 'mountup_unload', function()
+    queue('/alias delete /mountup')
+end)
+
+ashita.events.register('command', 'mountup_command', function(e)
+    local args = e.command:args()
+    if #args == 0 then
+        return
+    end
+
+    local a1 = args[1]:lower()
+
+    if a1 == '/mountup' then
+        e.blocked = true
+        mount_or_dismount()
+        return
+    end
+
+    if #args >= 4
+        and a1 == '/lua'
+        and args[2]:lower() == 'c'
+        and args[3]:lower() == 'mountup'
+    then
+        e.blocked = true
+
+        local sub = args[4]:lower()
+
+        if sub == 'toggle' then
+            mount_or_dismount()
+
+        elseif sub == 'mount' then
+            state.mounted = false
+            do_mount()
+
+        elseif sub == 'dismount' then
+            do_dismount()
+
+        elseif sub == 'reset' then
+            state.mounted = false
+            message('Mount state reset.')
+
+        else
+            message('Usage: /mountup')
+        end
+    end
+end)
