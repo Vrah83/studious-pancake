@@ -1,7 +1,7 @@
 addon = {
     name = 'mountup',
     author = 'Vrah',
-    version = '1.0',
+    version = '1.6',
 }
 
 require('common')
@@ -13,20 +13,25 @@ local chat = require('chat')
 -- =========================================================
 local MOUNT_COMMAND = '/mount "%s"'
 local DISMOUNT_COMMAND = '/dismount'
+local MOUNT_COOLDOWN = 60
 
--- ONLY your mounts
+-- =========================================================
+-- MANUAL MOUNT LIST
+-- =========================================================
 local OWNED_MOUNTS = {
     'Raptor',
     'Tiger',
     'Bomb',
     'Beetle',
     'Magic Pot',
-    'Xzomit',
+    'Tulfaire',
+    'Warmachine',
     'Goobbue',
+    'Raaz',
     'Adamantoise',
-    'Dhalmel',
-    'Wivre',
     'Phuabo',
+    'Hippogryph',
+    'Coeurl',
 }
 
 -- =========================================================
@@ -35,6 +40,7 @@ local OWNED_MOUNTS = {
 local state = {
     mounted = false,
     last_toggle = 0,
+    last_dismount_time = -9999, -- changed
 }
 
 -- =========================================================
@@ -58,6 +64,15 @@ local function choose_random_mount()
 end
 
 local function do_mount()
+    local now = os.clock()
+    local elapsed = now - state.last_dismount_time
+
+    if elapsed < MOUNT_COOLDOWN then
+        local remaining = math.ceil(MOUNT_COOLDOWN - elapsed)
+        message(('Mount is on cooldown. %d second(s) remaining.'):format(remaining))
+        return
+    end
+
     local mount_name = choose_random_mount()
     if not mount_name then
         message('No mounts listed.')
@@ -72,6 +87,7 @@ end
 local function do_dismount()
     queue(DISMOUNT_COMMAND)
     state.mounted = false
+    state.last_dismount_time = os.clock() -- cooldown starts here
     message('Dismounting.')
 end
 
@@ -89,6 +105,15 @@ local function mount_or_dismount()
     else
         do_mount()
     end
+end
+
+local function print_mounts()
+    if #OWNED_MOUNTS == 0 then
+        message('No mounts listed.')
+        return
+    end
+
+    message('Available mounts: ' .. table.concat(OWNED_MOUNTS, ', '))
 end
 
 -- =========================================================
@@ -139,10 +164,16 @@ ashita.events.register('command', 'mountup_command', function(e)
 
         elseif sub == 'reset' then
             state.mounted = false
-            message('Mount state reset.')
+            state.last_dismount_time = -9999
+            message('Mount state and cooldown reset.')
+
+        elseif sub == 'list' then
+            print_mounts()
 
         else
             message('Usage: /mountup')
+            message('/lua c mountup list')
+            message('/lua c mountup reset')
         end
     end
 end)
