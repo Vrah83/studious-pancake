@@ -1,23 +1,17 @@
 addon = {
     name = 'mountup',
     author = 'Vrah',
-    version = '1.6',
+    version = '3.3.4',
 }
 
 require('common')
 
 local chat = require('chat')
 
--- =========================================================
--- CONFIG
--- =========================================================
 local MOUNT_COMMAND = '/mount "%s"'
 local DISMOUNT_COMMAND = '/dismount'
-local MOUNT_COOLDOWN = 60
+local VISUAL_COOLDOWN = 60
 
--- =========================================================
--- MANUAL MOUNT LIST
--- =========================================================
 local OWNED_MOUNTS = {
     'Raptor',
     'Tiger',
@@ -34,18 +28,58 @@ local OWNED_MOUNTS = {
     'Coeurl',
 }
 
--- =========================================================
--- STATE
--- =========================================================
-local state = {
-    mounted = false,
-    last_toggle = 0,
-    last_dismount_time = -9999, -- changed
+local AUTO_DISMOUNT_ZONES = {
+    ['Western Adoulin'] = true,
+    ['Eastern Adoulin'] = true,
+    ['Ru\'Lude Gardens'] = true,
+    ['Upper Jeuno'] = true,
+    ['Lower Jeuno'] = true,
+    ['Port Jeuno'] = true,
+    ['Mhaura'] = true,
+    ['Selbina'] = true,
+    ['Nashmau'] = true,
+    ['Aht Urhgan Whitegate'] = true,
+
+    ['Crawler\'s Nest'] = true,
+    ['Crawler\'s Nest [S]'] = true,
+    ['Garlaige Citadel'] = true,
+    ['Garlaige Citadel [S]'] = true,
+    ['Eldieme Necropolis'] = true,
+    ['Eldieme Necropolis [S]'] = true,
+    ['Fei\'Yin'] = true,
+    ['Castle Zvahl Baileys'] = true,
+    ['Castle Zvahl Keep'] = true,
+    ['The Boyahda Tree'] = true,
+    ['Ifrit\'s Cauldron'] = true,
+    ['Kuftal Tunnel'] = true,
+    ['Sea Serpent Grotto'] = true,
+    ['Temple of Uggalepih'] = true,
+    ['Den of Rancor'] = true,
+    ['Sacrarium'] = true,
+    ['Phomiuna Aqueducts'] = true,
+    ['Promyvion - Holla'] = true,
+    ['Promyvion - Dem'] = true,
+    ['Promyvion - Mea'] = true,
+    ['Promyvion - Vahzl'] = true,
+
+    ['Dynamis - Bastok'] = true,
+    ['Dynamis - Windurst'] = true,
+    ['Dynamis - San d\'Oria'] = true,
+    ['Dynamis - Jeuno'] = true,
 }
 
--- =========================================================
--- HELPERS
--- =========================================================
+local state = {
+    mounted = false,
+    pending_mount = false,
+    in_no_mount_zone = false,
+    last_toggle = 0,
+    last_dismount_time = -9999,
+}
+
+local function now()
+    return os.time()
+end
+
 local function message(text)
     print(chat.header('MountUp'):append(chat.message(text)))
 end
@@ -58,122 +92,237 @@ local function choose_random_mount()
     if #OWNED_MOUNTS == 0 then
         return nil
     end
+    return OWNED_MOUNTS[math.random(1, #OWNED_MOUNTS)]
+end
 
-    local idx = math.random(1, #OWNED_MOUNTS)
-    return OWNED_MOUNTS[idx]
+local function get_zone_name()
+    local party = AshitaCore:GetMemoryManager():GetParty()
+    if not party then
+        return nil
+    end
+
+    local id = party:GetMemberZone(0)
+    if not id then
+        return nil
+    end
+
+    return AshitaCore:GetResourceManager():GetString('zones.names', id)
+end
+
+local function refresh_zone_state()
+    local z = get_zone_name()
+    if z and AUTO_DISMOUNT_ZONES[z] then
+        state.in_no_mount_zone = true
+        state.mounted = false
+        state.pending_mount = false
+    else
+        state.in_no_mount_zone = false
+    end
+end
+
+local function get_visual_cooldown_remaining()
+    local remaining = VISUAL_COOLDOWN - (now() - state.last_dismount_time)
+    if remaining < 0 then
+        return 0
+    end
+    return remaining
+end
+
+local function report_visual_cooldown()
+    local remaining = get_visual_cooldown_remaining()
+    if remaining > 0 then
+        message(('Cooldown remaining: %d second(s).'):format(remaining))
+    end
+end
+
+local function start_visual_cooldown()
+    if get_visual_cooldown_remaining() > 0 then
+        return
+    end
+    state.last_dismount_time = now()
+end
+
+local function is_mounted_live()
+    refresh_zone_state()
+
+    if state.in_no_mount_zone then
+        return false
+    end
+
+    local ok, res = pcall(function()
+        local mm = AshitaCore:GetMemoryManager()
+        if not mm then
+            return nil
+        end
+
+        local player = mm:GetPlayer()
+        if not player then
+            return nil
+        end
+
+        if type(player.IsMounted) == 'function' then
+            return player:IsMounted() == true
+        end
+
+        return nil
+    end)
+
+    if ok and res ~= nil then
+        state.mounted = res
+        if res then
+            state.pending_mount = false
+        end
+        return res
+    end
+
+    return state.mounted
 end
 
 local function do_mount()
-    local now = os.clock()
-    local elapsed = now - state.last_dismount_time
+    refresh_zone_state()
 
-    if elapsed < MOUNT_COOLDOWN then
-        local remaining = math.ceil(MOUNT_COOLDOWN - elapsed)
-        message(('Mount is on cooldown. %d second(s) remaining.'):format(remaining))
+    if state.in_no_mount_zone then
+        message('Cannot mount in this zone.')
+        state.mounted = false
+        state.pending_mount = false
         return
     end
 
-    local mount_name = choose_random_mount()
-    if not mount_name then
+    if is_mounted_live() then
+        return
+    end
+
+    local mount = choose_random_mount()
+    if not mount then
         message('No mounts listed.')
         return
     end
 
-    queue(string.format(MOUNT_COMMAND, mount_name))
-    state.mounted = true
-    message(('Mounting: %s'):format(mount_name))
+    queue(string.format(MOUNT_COMMAND, mount))
+    state.pending_mount = true
 end
 
 local function do_dismount()
-    queue(DISMOUNT_COMMAND)
-    state.mounted = false
-    state.last_dismount_time = os.clock() -- cooldown starts here
-    message('Dismounting.')
-end
-
-local function mount_or_dismount()
-    local now = os.clock()
-
-    if (now - state.last_toggle) < 1.0 then
+    if not is_mounted_live() then
+        state.mounted = false
+        state.pending_mount = false
         return
     end
 
-    state.last_toggle = now
+    queue(DISMOUNT_COMMAND)
+    state.mounted = false
+    state.pending_mount = false
+    start_visual_cooldown()
+end
 
-    if state.mounted then
+local function toggle_mount()
+    report_visual_cooldown()
+
+    local t = now()
+    if (t - state.last_toggle) < 1 then
+        return
+    end
+    state.last_toggle = t
+
+    local mounted_now = is_mounted_live()
+
+    if state.pending_mount and not mounted_now then
+        do_mount()
+        return
+    end
+
+    if mounted_now then
         do_dismount()
     else
         do_mount()
     end
 end
 
-local function print_mounts()
-    if #OWNED_MOUNTS == 0 then
-        message('No mounts listed.')
-        return
-    end
-
-    message('Available mounts: ' .. table.concat(OWNED_MOUNTS, ', '))
-end
-
--- =========================================================
--- EVENTS
--- =========================================================
 ashita.events.register('load', 'mountup_load', function()
     math.randomseed(os.time())
     queue('/alias /mountup /lua c mountup toggle')
-    message('Loaded. Type /mountup to mount or dismount.')
+    refresh_zone_state()
+    message('Loaded version 3.3.4.')
 end)
 
 ashita.events.register('unload', 'mountup_unload', function()
     queue('/alias delete /mountup')
 end)
 
-ashita.events.register('command', 'mountup_command', function(e)
-    local args = e.command:args()
-    if #args == 0 then
+ashita.events.register('zone_change', 'mountup_zone_change', function()
+    refresh_zone_state()
+    queue('/wait 1; /lua c mountup zonecheck')
+end)
+
+ashita.events.register('text_in', 'mountup_text_in', function(e)
+    local msg = e.message_modified or e.message
+    if not msg then
         return
     end
 
-    local a1 = args[1]:lower()
+    if msg:find('You cannot use that command while mounted%.') then
+        state.mounted = true
+        state.pending_mount = false
+        return
+    end
+
+    if msg:find('You dismount%.') or msg:find('You dismount your mount%.') then
+        state.mounted = false
+        state.pending_mount = false
+        start_visual_cooldown()
+        return
+    end
+end)
+
+ashita.events.register('command', 'mountup_command', function(e)
+    local a = e.command:args()
+    if #a == 0 then
+        return
+    end
+
+    local a1 = a[1]:lower()
 
     if a1 == '/mountup' then
         e.blocked = true
-        mount_or_dismount()
+        toggle_mount()
         return
     end
 
-    if #args >= 4
+    if #a >= 4
         and a1 == '/lua'
-        and args[2]:lower() == 'c'
-        and args[3]:lower() == 'mountup'
+        and a[2]:lower() == 'c'
+        and a[3]:lower() == 'mountup'
     then
         e.blocked = true
 
-        local sub = args[4]:lower()
+        local sub = a[4]:lower()
 
         if sub == 'toggle' then
-            mount_or_dismount()
+            toggle_mount()
 
         elseif sub == 'mount' then
-            state.mounted = false
             do_mount()
 
         elseif sub == 'dismount' then
             do_dismount()
 
+        elseif sub == 'zonecheck' then
+            refresh_zone_state()
+
+        elseif sub == 'status' then
+            message(('Mounted: %s | Pending mount: %s | No-mount zone: %s | Visual cooldown: %ds'):format(
+                tostring(is_mounted_live()),
+                tostring(state.pending_mount),
+                tostring(state.in_no_mount_zone),
+                get_visual_cooldown_remaining()
+            ))
+
         elseif sub == 'reset' then
             state.mounted = false
+            state.pending_mount = false
+            state.in_no_mount_zone = false
             state.last_dismount_time = -9999
-            message('Mount state and cooldown reset.')
-
-        elseif sub == 'list' then
-            print_mounts()
-
-        else
-            message('Usage: /mountup')
-            message('/lua c mountup list')
-            message('/lua c mountup reset')
+            message('Mount state reset.')
         end
     end
 end)
